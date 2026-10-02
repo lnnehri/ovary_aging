@@ -1,0 +1,3024 @@
+#AGING bachelor
+library(data.table)
+library(dplyr)
+library(ggplot2)
+dir.create("~/Desktop/GTEx_Ovary_MDT", showWarnings = FALSE)
+
+setwd("~/Desktop/GTEx_Ovary_MDT")
+
+getwd()
+url <- "https://storage.googleapis.com/adult-gtex/annotations/v8/metadata-files/GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt"
+
+download.file(
+  url,
+  destfile = "GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt",
+  mode = "wb"
+)
+library(data.table)
+
+sample_info <- fread("GTEx_Analysis_v8_Annotations_SampleAttributesDS.txt")
+
+dim(sample_info)
+ovary_samples <- sample_info[
+  SMTSD == "Ovary"
+]
+
+dim(ovary_samples)
+head(ovary_samples[, .(SAMPID, SMTS, SMTSD)])
+ovary_ids <- ovary_samples$SAMPID
+
+length(ovary_ids)
+writeLines(
+  ovary_ids,
+  "GTEx_v8_Ovary_sample_IDs.txt"
+)
+#transctipt verisi indir
+url_tpm <- paste0(
+  "https://storage.googleapis.com/adult-gtex/bulk-gex/v8/rna-seq/",
+  "GTEx_Analysis_2017-06-05_v8_RSEMv1.3.0_transcript_tpm.gct.gz"
+)
+
+download.file(
+  url_tpm,
+  destfile = "GTEx_v8_transcript_tpm.gct.gz",
+  mode = "wb"
+)
+
+#terminalde
+cd ~/Desktop/GTEx_Ovary_MDT
+
+curl -L -C - \
+"https://storage.googleapis.com/adult-gtex/bulk-gex/v8/rna-seq/GTEx_Analysis_2017-06-05_v8_RSEMv1.3.0_transcript_tpm.gct.gz" \
+-o GTEx_v8_transcript_tpm.gct.gz
+#### terminal bitti
+#kontrol
+
+file.info("GTEx_v8_transcript_tpm.gct.gz")$size / 1024^3
+header <- fread(
+  cmd = "gzcat GTEx_v8_transcript_tpm.gct.gz | head -n 3",
+  header = FALSE
+)
+
+dim(header)
+
+con <- gzfile("GTEx_v8_transcript_tpm.gct.gz", "rt")
+
+readLines(con, n = 2)   # ilk iki metadata satırını geç
+
+col_names <- strsplit(readLines(con, n = 1), "\t")[[1]]
+
+close(con)
+
+length(col_names)
+head(col_names)
+ovary_in_tpm <- intersect(ovary_ids, col_names)
+
+length(ovary_in_tpm)
+missing_ovary <- setdiff(ovary_ids, col_names)
+
+length(missing_ovary)
+missing_ovary
+keep_cols <- c(
+  match("transcript_id", col_names),
+  match("gene_id", col_names),
+  match(ovary_in_tpm, col_names)
+)
+
+length(keep_cols)
+ovary_tpm <- fread(
+  "GTEx_v8_transcript_tpm.gct.gz",
+  skip = 2,
+  select = keep_cols
+)
+
+dim(ovary_tpm)
+ovary_tpm[1:5, 1:6]
+saveRDS(
+  ovary_tpm,
+  "GTEx_v8_Ovary_transcript_TPM.rds"
+)
+file.info("GTEx_v8_Ovary_transcript_TPM.rds")$size / 1024^2
+#duplicate var mi 
+sum(duplicated(ovary_tpm$transcript_id))
+#yok
+#terminalde
+cd ~/Desktop/GTEx_Ovary_MDT
+
+curl -L -O \
+https://ftp.ensembl.org/pub/release-88/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz
+curl -L -O \
+https://ftp.ensembl.org/pub/release-88/fasta/homo_sapiens/pep/Homo_sapiens.GRCh38.pep.all.fa.gz
+
+##terminal bitti
+
+library(Biostrings)
+
+cdna <- readDNAStringSet(
+  "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+)
+
+length(cdna)
+pep <- readAAStringSet(
+  "Homo_sapiens.GRCh38.pep.all.fa.gz"
+)
+
+length(pep)
+head(names(cdna), 2)
+head(names(pep), 2)
+
+# cDNA FASTA'dan transcript ID
+cdna_ids <- sub(" .*", "", names(cdna))
+
+# Peptide FASTA'dan transcript ID (transcript: kısmından)
+pep_ids <- sub(
+  ".*transcript:(ENST[0-9]+\\.[0-9]+).*",
+  "\\1",
+  names(pep)
+)
+
+head(cdna_ids)
+head(pep_ids)
+sum(ovary_tpm$transcript_id %in% cdna_ids)
+sum(ovary_tpm$transcript_id %in% pep_ids)
+# Sadece GTEx'te bulunan cDNA'ları tut
+cdna_gtex <- cdna[cdna_ids %in% ovary_tpm$transcript_id]
+
+# Transcript ID'lerini isim olarak ata
+names(cdna_gtex) <- cdna_ids[cdna_ids %in% ovary_tpm$transcript_id]
+
+length(cdna_gtex)
+seq_char <- as.character(cdna_gtex)
+
+sum(duplicated(seq_char))
+cdna_headers_gtex <- names(cdna)[cdna_ids %in% ovary_tpm$transcript_id]
+
+gene_ids_cdna <- sub(
+  ".*gene:(ENSG[0-9]+\\.[0-9]+).*",
+  "\\1",
+  cdna_headers_gtex
+)
+
+head(gene_ids_cdna)
+sum(
+  duplicated(
+    paste(gene_ids_cdna, seq_char, sep = "|")
+  )
+)
+dup_key <- paste(gene_ids_cdna, seq_char, sep = "|")
+
+redundant_idx <- duplicated(dup_key) | duplicated(dup_key, fromLast = TRUE)
+
+redundant_table <- data.frame(
+  transcript_id = names(cdna_gtex)[redundant_idx],
+  gene_id = gene_ids_cdna[redundant_idx],
+  sequence = seq_char[redundant_idx]
+)
+
+nrow(redundant_table)
+length(unique(redundant_table$gene_id))
+#uzunluk karsilastirmasi
+pep_length <- width(pep)
+
+pep_table <- data.frame(
+  transcript_id = pep_ids,
+  protein_length = pep_length
+)
+
+head(pep_table)
+sum(redundant_table$transcript_id %in% pep_table$transcript_id)
+#uzunluk ekle
+redundant_table2 <- merge(
+  redundant_table,
+  pep_table,
+  by = "transcript_id",
+  all.x = TRUE
+)
+
+table(is.na(redundant_table2$protein_length))
+redundant_table2$group_id <- paste(
+  redundant_table2$gene_id,
+  redundant_table2$sequence,
+  sep = "|"
+)
+
+group_summary <- redundant_table2 %>%
+  group_by(group_id) %>%
+  summarise(
+    n_transcripts = n(),
+    n_with_protein = sum(!is.na(protein_length)),
+    .groups = "drop"
+  )
+
+table(group_summary$n_transcripts)
+table(group_summary$n_with_protein)
+#en uzunu belirle
+redundant_ranked <- redundant_table2 %>%
+  group_by(group_id) %>%
+  arrange(desc(protein_length), .by_group = TRUE) %>%
+  mutate(
+    rank_protein = rank(-protein_length, ties.method = "min")
+  ) %>%
+  ungroup()
+
+redundant_ranked %>%
+  select(transcript_id, gene_id, protein_length, rank_protein) %>%
+  head(20)
+tie_check <- redundant_table2 %>%
+  group_by(group_id) %>%
+  filter(!is.na(protein_length)) %>%
+  summarise(
+    n_max = sum(protein_length == max(protein_length)),
+    .groups = "drop"
+  )
+
+table(tie_check$n_max)
+#esit mi degil mi kontrol uzunluklarin
+pep_seq <- as.character(pep)
+names(pep_seq) <- pep_ids
+
+redundant_table2$protein_sequence <- 
+  pep_seq[redundant_table2$transcript_id]
+
+tie_groups <- redundant_table2 %>%
+  group_by(group_id) %>%
+  filter(
+    !is.na(protein_length),
+    protein_length == max(protein_length),
+    n() > 1
+  ) %>%
+  ungroup()
+
+nrow(tie_groups)
+tie_seq_check <- tie_groups %>%
+  group_by(group_id) %>%
+  summarise(
+    n_transcripts = n(),
+    n_unique_protein_sequences = n_distinct(protein_sequence),
+    .groups = "drop"
+  )
+
+table(tie_seq_check$n_unique_protein_sequences)
+tie_verify <- tie_groups %>%
+  group_by(group_id) %>%
+  summarise(
+    n_transcripts = n(),
+    n_unique_cdna = n_distinct(sequence),
+    n_unique_protein = n_distinct(protein_sequence),
+    .groups = "drop"
+  )
+
+table(
+  tie_verify$n_unique_cdna,
+  tie_verify$n_unique_protein
+)
+# GTEx'te bulunan ve protein bilgisi olan transcriptler
+protein_cdna_df <- data.frame(
+  transcript_id = names(cdna_gtex),
+  gene_id = gene_ids_cdna,
+  cdna_sequence = seq_char
+) %>%
+  left_join(
+    pep_table %>%
+      mutate(protein_sequence = pep_seq[transcript_id]),
+    by = "transcript_id"
+  ) %>%
+  filter(!is.na(protein_sequence))
+
+# Aynı gene ait + aynı protein üreten transcriptleri grupla
+same_protein_check <- protein_cdna_df %>%
+  group_by(gene_id, protein_sequence) %>%
+  summarise(
+    n_transcripts = n(),
+    n_unique_cdna = n_distinct(cdna_sequence),
+    .groups = "drop"
+  ) %>%
+  filter(
+    n_transcripts > 1,
+    n_unique_cdna > 1
+  )
+
+nrow(same_protein_check)
+same_protein_examples <- protein_cdna_df %>%
+  semi_join(
+    same_protein_check,
+    by = c("gene_id", "protein_sequence")
+  ) %>%
+  group_by(gene_id, protein_sequence) %>%
+  mutate(
+    cdna_length = nchar(cdna_sequence)
+  ) %>%
+  select(
+    gene_id,
+    transcript_id,
+    cdna_length,
+    protein_length
+  ) %>%
+  arrange(gene_id)
+
+same_protein_examples %>% head(20)
+###
+redundant_status <- redundant_table2 %>%
+  group_by(group_id) %>%
+  summarise(
+    n_transcripts = n(),
+    n_protein = sum(!is.na(protein_length)),
+    min_protein_length = ifelse(
+      all(is.na(protein_length)), NA,
+      min(protein_length, na.rm = TRUE)
+    ),
+    max_protein_length = ifelse(
+      all(is.na(protein_length)), NA,
+      max(protein_length, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    status = case_when(
+      n_protein == 0 ~ "No protein information",
+      min_protein_length == max_protein_length ~ "Same protein length",
+      TRUE ~ "Different protein length"
+    )
+  )
+
+table(redundant_status$status)
+exact_redundant <- protein_cdna_df %>%
+  group_by(gene_id, cdna_sequence, protein_sequence) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+exact_redundant_groups <- exact_redundant %>%
+  group_by(gene_id, cdna_sequence, protein_sequence) %>%
+  summarise(
+    n_transcripts = n(),
+    .groups = "drop"
+  )
+
+nrow(exact_redundant_groups)
+table(exact_redundant_groups$n_transcripts)
+exact_ids <- unique(exact_redundant$transcript_id)
+
+exact_expression <- ovary_tpm %>%
+  filter(transcript_id %in% exact_ids) %>%
+  mutate(
+    total_TPM = rowSums(across(-c(transcript_id, gene_id)))
+  ) %>%
+  select(transcript_id, gene_id, total_TPM) %>%
+  arrange(gene_id, desc(total_TPM))
+
+exact_expression
+exact_group_map <- exact_redundant %>%
+  group_by(gene_id, cdna_sequence, protein_sequence) %>%
+  summarise(
+    transcripts = paste(transcript_id, collapse = " | "),
+    n_transcripts = n(),
+    .groups = "drop"
+  ) %>%
+  select(gene_id, n_transcripts, transcripts)
+
+exact_group_map
+exact_redundant <- exact_redundant %>%
+  group_by(gene_id, cdna_sequence, protein_sequence) %>%
+  mutate(
+    redundant_group = cur_group_id()
+  ) %>%
+  ungroup()
+
+exact_redundant %>%
+  select(redundant_group, gene_id, transcript_id) %>%
+  arrange(redundant_group)
+length(unique(exact_redundant$redundant_group))
+sample_cols <- setdiff(
+  colnames(ovary_tpm),
+  c("transcript_id", "gene_id")
+)
+
+transcript_total_tpm <- ovary_tpm %>%
+  mutate(total_TPM = rowSums(across(all_of(sample_cols)))) %>%
+  select(transcript_id, total_TPM)
+
+redundant_decisions <- exact_redundant %>%
+  left_join(transcript_total_tpm, by = "transcript_id") %>%
+  group_by(redundant_group) %>%
+  arrange(desc(total_TPM), transcript_id, .by_group = TRUE) %>%
+  mutate(
+    decision = ifelse(row_number() == 1, "KEEP", "MERGE")
+  ) %>%
+  ungroup()
+
+table(redundant_decisions$decision)
+sample_cols <- setdiff(
+  colnames(ovary_tpm),
+  c("transcript_id", "gene_id")
+)
+
+# Her transcriptin toplam Ovary TPM'i
+transcript_total_tpm <- ovary_tpm %>%
+  mutate(total_TPM = rowSums(across(all_of(sample_cols)))) %>%
+  select(transcript_id, total_TPM)
+
+# Her redundant grupta tutulacak transcript
+redundant_decisions <- exact_redundant %>%
+  left_join(transcript_total_tpm, by = "transcript_id") %>%
+  group_by(redundant_group) %>%
+  arrange(desc(total_TPM), transcript_id, .by_group = TRUE) %>%
+  mutate(
+    decision = ifelse(row_number() == 1, "KEEP", "MERGE")
+  ) %>%
+  ungroup()
+
+table(redundant_decisions$decision)
+#merging
+ovary_tpm_clean <- copy(ovary_tpm)
+
+for (g in unique(redundant_decisions$redundant_group)) {
+  
+  x <- redundant_decisions %>%
+    filter(redundant_group == g)
+  
+  keep_id <- x$transcript_id[x$decision == "KEEP"]
+  merge_ids <- x$transcript_id[x$decision == "MERGE"]
+  
+  # MERGE transcriptlerinin TPM'lerini KEEP transcriptine ekle
+  ovary_tpm_clean[
+    transcript_id == keep_id,
+    (sample_cols) := lapply(
+      sample_cols,
+      function(col)
+        get(col) + colSums(
+          ovary_tpm_clean[transcript_id %in% merge_ids, ..col]
+        )
+    )
+  ]
+  
+  # Redundant transcriptleri kaldır
+  ovary_tpm_clean <- ovary_tpm_clean[
+    !transcript_id %in% merge_ids
+  ]
+}
+
+dim(ovary_tpm_clean)
+
+#ayni gen- farkli cdna- ayni protein
+# Temizlenmiş veride kalan transcriptleri kullan
+architecture_df <- data.frame(
+  transcript_id = names(cdna_gtex),
+  gene_id = gene_ids_cdna,
+  cdna_sequence = as.character(cdna_gtex)
+) %>%
+  filter(transcript_id %in% ovary_tpm_clean$transcript_id) %>%
+  left_join(
+    pep_table %>%
+      mutate(protein_sequence = pep_seq[transcript_id]),
+    by = "transcript_id"
+  )
+
+dim(architecture_df)
+same_gene_diff_cdna_same_protein <- architecture_df %>%
+  filter(!is.na(protein_sequence)) %>%
+  group_by(gene_id, protein_sequence) %>%
+  filter(n_distinct(cdna_sequence) > 1) %>%
+  summarise(
+    n_transcripts = n_distinct(transcript_id),
+    n_cdna = n_distinct(cdna_sequence),
+    .groups = "drop"
+  )
+
+dim(same_gene_diff_cdna_same_protein)
+
+summary(same_gene_diff_cdna_same_protein$n_cdna)
+
+head(
+  same_gene_diff_cdna_same_protein %>%
+    arrange(desc(n_cdna)),
+  10
+)
+nrow(same_gene_diff_cdna_same_protein)
+
+n_distinct(same_gene_diff_cdna_same_protein$gene_id)
+
+table(same_gene_diff_cdna_same_protein$n_cdna)
+cdna_convergence_plot <- same_gene_diff_cdna_same_protein %>%
+  dplyr::count(n_cdna, name = "n_gene_protein_groups")
+
+cdna_convergence_plot
+ggplot(cdna_convergence_plot,
+       aes(x = factor(n_cdna),
+           y = n_gene_protein_groups)) +
+  geom_col() +
+  geom_text(
+    aes(label = n_gene_protein_groups),
+    vjust = -0.3,
+    size = 3
+  ) +
+  labs(
+    title = "Different cDNA Sequences Producing the Same Protein",
+    subtitle = "Within the same gene",
+    x = "Number of distinct cDNA sequences producing the same protein",
+    y = "Number of Gene–Protein groups"
+  ) +
+  theme_classic()
+#gen centric analiz
+#yukaridaki kombinasyona bakiyordu sallama onu
+
+gene_cdna_same_protein <- architecture_df %>%
+  filter(!is.na(protein_sequence)) %>%
+  group_by(gene_id) %>%
+  summarise(
+    n_transcripts = n_distinct(transcript_id),
+    n_cdna = n_distinct(cdna_sequence),
+    n_proteins = n_distinct(protein_sequence),
+    .groups = "drop"
+  ) %>%
+  filter(
+    n_cdna > 1,
+    n_proteins == 1
+  )
+
+nrow(gene_cdna_same_protein)
+gene_cdna_same_protein_plot <- gene_cdna_same_protein %>%
+  dplyr::count(n_cdna, name = "n_genes")
+
+ggplot(gene_cdna_same_protein_plot,
+       aes(x = factor(n_cdna), y = n_genes)) +
+  geom_col() +
+  geom_text(
+    aes(label = n_genes),
+    vjust = -0.3,
+    size = 3
+  ) +
+  labs(
+    title = "Multiple cDNA Sequences Producing a Single Protein",
+    subtitle = "Gene-centric analysis",
+    x = "Number of distinct cDNA sequences per gene",
+    y = "Number of genes"
+  ) +
+  theme_classic()
+###age bilgisi indirme
+download.file(
+  "https://storage.googleapis.com/adult-gtex/annotations/v8/metadata-files/GTEx_Analysis_v8_Annotations_SubjectPhenotypesDS.txt",
+  destfile = "GTEx_v8_SubjectPhenotypes.txt",
+  mode = "wb"
+)
+
+subject_info <- fread("GTEx_v8_SubjectPhenotypes.txt")
+
+dim(subject_info)
+colnames(subject_info)
+ovary_age <- ovary_samples %>%
+  mutate(
+    SUBJID = sub("^(([^-]+-){2}[^-]+)-.*$", "\\1", SAMPID)
+  ) %>%
+  left_join(
+    subject_info %>% select(SUBJID, AGE),
+    by = "SUBJID"
+  ) %>%
+  filter(SAMPID %in% colnames(ovary_tpm_clean))
+
+dim(ovary_age)
+
+table(ovary_age$AGE, useNA = "ifany")
+#usteki olmadi su dogru:
+ovary_age <- ovary_samples %>%
+  mutate(
+    SUBJID = sub("^(GTEX-[^-]+).*", "\\1", SAMPID)
+  ) %>%
+  left_join(
+    subject_info %>% select(SUBJID, AGE),
+    by = "SUBJID"
+  ) %>%
+  filter(SAMPID %in% colnames(ovary_tpm_clean))
+
+dim(ovary_age)
+
+table(ovary_age$AGE, useNA = "ifany")
+# 740 gene ait transcriptleri belirle
+target_transcripts <- architecture_df %>%
+  filter(gene_id %in% gene_cdna_same_protein$gene_id) %>%
+  select(transcript_id, gene_id, cdna_sequence, protein_sequence) %>%
+  distinct()
+
+# TPM'leri al
+target_tpm <- ovary_tpm_clean %>%
+  filter(transcript_id %in% target_transcripts$transcript_id)
+
+dim(target_transcripts)
+dim(target_tpm)
+library(tidyr)
+
+target_long <- target_tpm %>%
+  pivot_longer(
+    cols = all_of(ovary_age$SAMPID),
+    names_to = "SAMPID",
+    values_to = "TPM"
+  ) %>%
+  left_join(
+    target_transcripts,
+    by = c("transcript_id", "gene_id")
+  ) %>%
+  left_join(
+    ovary_age %>% select(SAMPID, AGE),
+    by = "SAMPID"
+  )
+
+dim(target_long)
+
+table(target_long$AGE, useNA = "ifany")
+age_tpm_summary <- target_long %>%
+  group_by(AGE, transcript_id) %>%
+  summarise(
+    mean_TPM = mean(TPM),
+    .groups = "drop"
+  )
+
+ggplot(age_tpm_summary,
+       aes(x = AGE, y = log10(mean_TPM + 1))) +
+  geom_boxplot(outlier.shape = NA) +
+  labs(
+    title = "Transcript Expression Across Age Groups",
+    subtitle = "740 genes with multiple cDNAs encoding the same annotated protein",
+    x = "Age group",
+    y = "log10(mean TPM + 1)"
+  ) +
+  theme_classic()
+#ayni gen icinde cdna dagilim orani yasla degisiyor mu
+target_long <- target_long %>%
+  group_by(SAMPID, gene_id) %>%
+  mutate(
+    gene_TPM = sum(TPM),
+    cdna_usage = ifelse(gene_TPM > 0, TPM / gene_TPM, NA_real_)
+  ) %>%
+  ungroup()
+
+summary(target_long$cdna_usage)
+all_target_gene_tpm <- ovary_tpm_clean %>%
+  filter(gene_id %in% gene_cdna_same_protein$gene_id) %>%
+  pivot_longer(
+    cols = all_of(ovary_age$SAMPID),
+    names_to = "SAMPID",
+    values_to = "TPM_all"
+  ) %>%
+  group_by(gene_id, SAMPID) %>%
+  summarise(
+    total_gene_TPM = sum(TPM_all),
+    .groups = "drop"
+  )
+
+dim(all_target_gene_tpm)
+target_long <- target_long %>%
+  select(-gene_TPM, -cdna_usage) %>%
+  left_join(
+    all_target_gene_tpm,
+    by = c("gene_id", "SAMPID")
+  ) %>%
+  mutate(
+    cdna_usage = ifelse(
+      total_gene_TPM > 0,
+      TPM / total_gene_TPM,
+      NA_real_
+    )
+  )
+
+summary(target_long$cdna_usage)
+target_long <- target_long %>%
+  mutate(
+    age_num = case_when(
+      AGE == "20-29" ~ 25,
+      AGE == "30-39" ~ 35,
+      AGE == "40-49" ~ 45,
+      AGE == "50-59" ~ 55,
+      AGE == "60-69" ~ 65,
+      AGE == "70-79" ~ 75
+    )
+  )
+
+table(target_long$age_num, useNA = "ifany")
+age_usage_results <- target_long %>%
+  filter(!is.na(cdna_usage), !is.na(age_num)) %>%
+  group_by(gene_id, transcript_id) %>%
+  filter(n_distinct(age_num) >= 4) %>%
+  summarise(
+    n_samples = n(),
+    rho = cor(age_num, cdna_usage, method = "spearman"),
+    p_value = cor.test(
+      age_num,
+      cdna_usage,
+      method = "spearman",
+      exact = FALSE
+    )$p.value,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    FDR = p.adjust(p_value, method = "BH")
+  )
+
+dim(age_usage_results)
+
+summary(age_usage_results$rho)
+
+sum(age_usage_results$FDR < 0.05, na.rm = TRUE)
+age_usage_results %>%
+  filter(FDR < 0.05) %>%
+  summarise(
+    significant = n(),
+    increasing = sum(rho > 0),
+    decreasing = sum(rho < 0),
+    strong = sum(abs(rho) >= 0.3),
+    very_strong = sum(abs(rho) >= 0.5)
+  )
+age_usage_results <- age_usage_results %>%
+  mutate(
+    status = case_when(
+      FDR < 0.05 & rho > 0 ~ "Increasing with age",
+      FDR < 0.05 & rho < 0 ~ "Decreasing with age",
+      TRUE ~ "Not significant"
+    )
+  )
+
+ggplot(age_usage_results,
+       aes(x = rho, y = -log10(FDR), color = status)) +
+  geom_point(alpha = 0.7, size = 2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Age-associated Changes in cDNA Usage",
+    subtitle = "Multiple cDNAs encoding the same annotated protein",
+    x = "Spearman correlation with age (rho)",
+    y = "-log10(FDR)",
+    color = NULL
+  ) +
+  theme_classic()
+library(ggrepel)
+
+plot_df <- age_usage_results %>%
+  mutate(
+    label = ifelse(
+      FDR < 0.05 & abs(rho) >= 0.30,
+      paste0(gene_id, "\n", transcript_id),
+      NA
+    )
+  )
+
+ggplot(plot_df,
+       aes(x = rho, y = -log10(FDR), color = status)) +
+  geom_point(alpha = 0.7, size = 2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_text_repel(
+    aes(label = label),
+    size = 2.5,
+    max.overlaps = Inf
+  ) +
+  labs(
+    title = "Age-associated Changes in cDNA Usage",
+    subtitle = "Labels: FDR < 0.05 and |rho| ≥ 0.30",
+    x = "Spearman correlation with age (rho)",
+    y = "-log10(FDR)",
+    color = NULL
+  ) +
+  theme_classic()
+head(cdna_headers_gtex, 5)
+gene_annotation <- data.frame(
+  gene_id = sub(
+    ".*gene:(ENSG[0-9]+\\.[0-9]+).*",
+    "\\1",
+    cdna_headers_gtex
+  ),
+  gene_symbol = sub(
+    ".*gene_symbol:([^ ]+).*",
+    "\\1",
+    cdna_headers_gtex
+  )
+) %>%
+  distinct(gene_id, gene_symbol)
+
+head(gene_annotation)
+dim(gene_annotation)
+age_usage_results <- age_usage_results %>%
+  left_join(gene_annotation, by = "gene_id")
+
+sum(!is.na(age_usage_results$gene_symbol))
+sum(is.na(age_usage_results$gene_symbol))
+
+age_usage_results %>%
+  filter(FDR < 0.05) %>%
+  arrange(desc(abs(rho))) %>%
+  select(gene_symbol, gene_id, transcript_id, rho, FDR) %>%
+  head(20)
+label_genes <- age_usage_results %>%
+  filter(FDR < 0.05, abs(rho) >= 0.30) %>%
+  group_by(gene_symbol) %>%
+  slice_max(abs(rho), n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  pull(transcript_id)
+
+plot_df <- age_usage_results %>%
+  mutate(
+    label = ifelse(
+      transcript_id %in% label_genes,
+      paste0(gene_symbol, "\n", transcript_id),
+      NA
+    )
+  )
+
+ggplot(plot_df,
+       aes(x = rho, y = -log10(FDR), color = status)) +
+  geom_point(alpha = 0.65, size = 2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  ggrepel::geom_text_repel(
+    aes(label = label),
+    size = 2.7,
+    max.overlaps = Inf
+  ) +
+  labs(
+    title = "Age-associated Changes in cDNA Usage",
+    subtitle = "Genes with multiple cDNAs encoding the same annotated protein",
+    x = "Spearman correlation with age (ρ)",
+    y = "-log10(FDR)",
+    color = NULL
+  ) +
+  theme_classic()
+sig53 <- age_usage_results %>%
+  filter(FDR < 0.05, abs(rho) >= 0.30)
+
+sig53 %>%
+  count(gene_symbol, name = "n_significant_transcripts") %>%
+  arrange(desc(n_significant_transcripts))
+sig53 %>%
+  dplyr::count(gene_symbol) %>%
+  dplyr::arrange(desc(n))
+heatmap_df <- sig53 %>%
+  mutate(
+    transcript_short = sub("\\..*", "", transcript_id),
+    gene_transcript = paste0(gene_symbol, " | ", transcript_short)
+  )
+
+ggplot(
+  heatmap_df,
+  aes(
+    x = gene_symbol,
+    y = gene_transcript,
+    fill = rho
+  )
+) +
+  geom_tile(color = "white") +
+  geom_text(
+    aes(label = round(rho, 2)),
+    size = 3
+  ) +
+  labs(
+    title = "Age-associated cDNA Usage Changes",
+    subtitle = "FDR < 0.05 and |rho| ≥ 0.30",
+    x = "Gene",
+    y = "Transcript",
+    fill = "Spearman\nrho"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+heatmap2_df <- sig53 %>%
+  group_by(gene_symbol) %>%
+  arrange(rho, .by_group = TRUE) %>%
+  mutate(
+    transcript_no = paste0("T", row_number())
+  ) %>%
+  ungroup()
+
+heatmap2_df %>%
+  select(gene_symbol, transcript_no, transcript_id, rho, FDR) %>%
+  arrange(gene_symbol, transcript_no)
+ggplot(
+  heatmap2_df,
+  aes(x = transcript_no, y = gene_symbol, fill = rho)
+) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(
+    aes(label = sprintf("%.2f", rho)),
+    size = 3
+  ) +
+  labs(
+    title = "Age-associated cDNA Usage by Gene",
+    subtitle = "FDR < 0.05 and |rho| ≥ 0.30",
+    x = "Age-associated transcript",
+    y = "Gene",
+    fill = "Spearman\nrho"
+  ) +
+  scale_y_discrete(limits = rev) +
+  theme_classic()
+switch_genes <- sig53 %>%
+  group_by(gene_symbol, gene_id) %>%
+  summarise(
+    n_sig_transcripts = n(),
+    n_increasing = sum(rho > 0),
+    n_decreasing = sum(rho < 0),
+    max_positive_rho = max(rho[rho > 0], na.rm = TRUE),
+    min_negative_rho = min(rho[rho < 0], na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(
+    n_increasing > 0,
+    n_decreasing > 0
+  )
+
+switch_genes
+nrow(switch_genes)
+ggplot(
+  heatmap2_df,
+  aes(x = transcript_no, y = gene_symbol, fill = rho)
+) +
+  geom_tile(color = "grey90", linewidth = 0.6) +
+  geom_text(
+    aes(label = sprintf("%.2f", rho)),
+    size = 3.2
+  ) +
+  scale_fill_gradient2(
+    low = "#A6CEE3",
+    mid = "white",
+    high = "#FB9A99",
+    midpoint = 0,
+    limits = c(-0.9, 0.9)
+  ) +
+  labs(
+    title = "Age-associated cDNA Usage by Gene",
+    subtitle = "FDR < 0.05 and |ρ| ≥ 0.30",
+    x = "Age-associated transcript",
+    y = "Gene",
+    fill = "Spearman\nρ"
+  ) +
+  scale_y_discrete(limits = rev) +
+  theme_classic()
+switch_age <- target_long %>%
+  filter(gene_id %in% switch_genes$gene_id) %>%
+  left_join(
+    gene_annotation,
+    by = "gene_id"
+  ) %>%
+  group_by(
+    gene_symbol,
+    transcript_id,
+    AGE
+  ) %>%
+  summarise(
+    mean_usage = mean(cdna_usage, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    AGE = factor(
+      AGE,
+      levels = c(
+        "20-29", "30-39", "40-49",
+        "50-59", "60-69", "70-79"
+      )
+    )
+  )
+ggplot(
+  switch_age,
+  aes(
+    x = AGE,
+    y = mean_usage,
+    group = transcript_id,
+    color = transcript_id
+  )
+) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2) +
+  facet_wrap(
+    ~ gene_symbol,
+    scales = "free_y",
+    ncol = 3
+  ) +
+  labs(
+    title = "Age-dependent cDNA Usage in Switch-like Genes",
+    subtitle = "Mean transcript usage across GTEx ovary age groups",
+    x = "Age group",
+    y = "Mean cDNA usage",
+    color = "Transcript"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+sig36_age <- target_long %>%
+  filter(transcript_id %in% sig53$transcript_id) %>%
+  left_join(
+    gene_annotation,
+    by = "gene_id"
+  ) %>%
+  group_by(gene_symbol, transcript_id, AGE) %>%
+  summarise(
+    mean_usage = mean(cdna_usage, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    AGE = factor(
+      AGE,
+      levels = c(
+        "20-29", "30-39", "40-49",
+        "50-59", "60-69", "70-79"
+      )
+    )
+  )
+n_distinct(sig36_age$gene_symbol)
+n_distinct(sig36_age$transcript_id)
+
+p36 <- ggplot(
+  sig36_age,
+  aes(
+    x = AGE,
+    y = mean_usage,
+    group = transcript_id,
+    color = transcript_id
+  )
+) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.7) +
+  
+  geom_text(
+    data = sig36_age %>% filter(AGE == "70-79"),
+    aes(label = sub("\\..*", "", transcript_id)),
+    hjust = -0.05,
+    size = 2,
+    show.legend = FALSE
+  ) +
+  
+  facet_wrap(
+    ~ gene_symbol,
+    scales = "free_y",
+    ncol = 4
+  ) +
+  
+  scale_x_discrete(
+    expand = expansion(mult = c(0.03, 0.32))
+  ) +
+  
+  labs(
+    title = "Age-associated cDNA Usage Across 36 Genes",
+    subtitle = "53 transcripts with FDR < 0.05 and |rho| >= 0.30",
+    x = "Age group",
+    y = "Mean cDNA usage"
+  ) +
+  
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      size = 7
+    ),
+    strip.text = element_text(
+      face = "bold",
+      size = 9
+    )
+  )
+
+p36
+ggsave(
+  "Age_associated_cDNA_usage_36_genes.png",
+  plot = p36,
+  width = 16,
+  height = 18,
+  dpi = 300
+)
+write.csv(
+  sig36_age,
+  "Age_associated_cDNA_usage_36_genes.csv",
+  row.names = FALSE
+)
+data = sig36_age %>% filter(AGE == "70-79")
+label_df <- sig36_age %>%
+  filter(!is.na(mean_usage)) %>%
+  group_by(gene_symbol, transcript_id) %>%
+  arrange(AGE) %>%
+  slice_tail(n = 1) %>%
+  ungroup()
+
+n_distinct(label_df$transcript_id)
+p36 <- ggplot(
+  sig36_age,
+  aes(
+    x = AGE,
+    y = mean_usage,
+    group = transcript_id,
+    color = transcript_id
+  )
+) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.7) +
+  
+  geom_text(
+    data = label_df,
+    aes(label = sub("\\..*", "", transcript_id)),
+    hjust = -0.05,
+    size = 2,
+    show.legend = FALSE
+  ) +
+  
+  facet_wrap(
+    ~ gene_symbol,
+    scales = "free_y",
+    ncol = 4
+  ) +
+  
+  scale_x_discrete(
+    expand = expansion(mult = c(0.03, 0.35))
+  ) +
+  
+  labs(
+    title = "Age-associated cDNA Usage Across 36 Genes",
+    subtitle = "53 transcripts with FDR < 0.05 and |rho| >= 0.30",
+    x = "Age group",
+    y = "Mean cDNA usage"
+  ) +
+  
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      size = 7
+    ),
+    strip.text = element_text(
+      face = "bold",
+      size = 9
+    )
+  )
+
+p36
+ggsave(
+  "Age_associated_cDNA_usage_36_genes.png",
+  plot = p36,
+  width = 16,
+  height = 18,
+  dpi = 300
+)
+# 15 switch-like genin significant transcriptleri
+switch15_age <- sig36_age %>%
+  filter(gene_symbol %in% switch_genes$gene_symbol)
+
+# Her transcript için son mevcut noktayı bul
+switch15_labels <- switch15_age %>%
+  filter(!is.na(mean_usage)) %>%
+  group_by(gene_symbol, transcript_id) %>%
+  arrange(AGE) %>%
+  slice_tail(n = 1) %>%
+  ungroup()
+
+# Grafik
+p15 <- ggplot(
+  switch15_age,
+  aes(
+    x = AGE,
+    y = mean_usage,
+    group = transcript_id,
+    color = transcript_id
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  
+  geom_text(
+    data = switch15_labels,
+    aes(label = sub("\\..*", "", transcript_id)),
+    hjust = -0.05,
+    size = 2.4,
+    show.legend = FALSE
+  ) +
+  
+  facet_wrap(
+    ~ gene_symbol,
+    scales = "free_y",
+    ncol = 3
+  ) +
+  
+  scale_x_discrete(
+    expand = expansion(mult = c(0.03, 0.35))
+  ) +
+  
+  labs(
+    title = "Age-associated Switch-like cDNA Usage",
+    subtitle = "15 genes with significant transcripts changing in opposite directions",
+    x = "Age group",
+    y = "Mean cDNA usage"
+  ) +
+  
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+    strip.text = element_text(
+      face = "bold",
+      size = 10
+    )
+  )
+
+p15
+ggsave(
+  "Age_switch_like_cDNA_usage_15_genes.png",
+  plot = p15,
+  width = 14,
+  height = 13,
+  dpi = 300
+)
+#cmd switchlerin GO lari
+library(clusterProfiler)
+library(org.Hs.eg.db)
+switch_symbols <- unique(switch_genes$gene_symbol)
+
+switch_symbols
+length(switch_symbols)
+background_symbols <- gene_cdna_same_protein %>%
+  left_join(gene_annotation, by = "gene_id") %>%
+  pull(gene_symbol) %>%
+  unique()
+
+length(background_symbols)
+go_switch <- enrichGO(
+  gene          = switch_symbols,
+  universe      = background_symbols,
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.20,
+  readable      = TRUE
+)
+
+as.data.frame(go_switch) %>%
+  select(ID, Description, GeneRatio, BgRatio, pvalue, p.adjust, geneID) %>%
+  head(20)
+go_switch_df <- as.data.frame(go_switch)
+
+go_switch_df %>%
+  dplyr::select(
+    ID,
+    Description,
+    GeneRatio,
+    BgRatio,
+    pvalue,
+    p.adjust,
+    geneID
+  ) %>%
+  head(20)
+dominant_by_age <- switch15_age %>%
+  group_by(gene_symbol, AGE) %>%
+  filter(!is.na(mean_usage)) %>%
+  slice_max(
+    order_by = mean_usage,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+  ungroup() %>%
+  dplyr::select(
+    gene_symbol,
+    AGE,
+    dominant_transcript = transcript_id,
+    dominant_usage = mean_usage
+  )
+
+dominant_by_age
+#dominance 
+all_ovary_long <- ovary_tpm_clean %>%
+  pivot_longer(
+    cols = all_of(ovary_age$SAMPID),
+    names_to = "SAMPID",
+    values_to = "TPM"
+  )
+
+ovary_mdt <- all_ovary_long %>%
+  group_by(SAMPID, gene_id) %>%
+  filter(TPM > 0) %>%
+  slice_max(
+    order_by = TPM,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+  ungroup()
+
+dim(ovary_mdt)
+library(data.table)
+
+dt <- as.data.table(ovary_tpm_clean)
+
+mdt_list <- lapply(ovary_age$SAMPID, function(samp) {
+
+  dt[
+    get(samp) > 0,
+    .SD[which.max(get(samp))],
+    by = gene_id,
+    .SDcols = c("transcript_id", samp)
+  ][, SAMPID := samp]
+
+})
+
+ovary_mdt <- rbindlist(mdt_list, fill = TRUE)
+
+dim(ovary_mdt)
+
+table(gene_cdna_same_protein$n_cdna)
+##
+library(data.table)
+
+dt <- as.data.table(ovary_tpm_clean)
+
+mdt_list <- lapply(ovary_age$SAMPID, function(samp) {
+  
+  dt[
+    get(samp) > 0,
+    .SD[which.max(get(samp))],
+    by = gene_id,
+    .SDcols = c("transcript_id", samp)
+  ][, SAMPID := samp]
+  
+})
+#asagidakini ram calistirmiyor
+
+ovary_mdt <- rbindlist(mdt_list, fill = TRUE)
+
+dim(ovary_mdt)
+#sunu deneyince calisiyor
+mdt_counts <- rbindlist(
+  lapply(mdt_list, function(x) {
+    x[, .N, by = .(gene_id, transcript_id)]
+  })
+)[
+  , .(n_samples_MDT = sum(N)),
+  by = .(gene_id, transcript_id)
+][
+  order(-n_samples_MDT)
+]
+
+head(mdt_counts, 20)
+mdt_variable <- mdt_counts[
+  , .(
+    n_MDT_transcripts = .N,
+    max_MDT_samples = max(n_samples_MDT)
+  ),
+  by = gene_id
+][
+  n_MDT_transcripts > 1
+][
+  order(-n_MDT_transcripts, max_MDT_samples)
+]
+
+head(mdt_variable, 20)
+switch_mdt <- mdt_variable[
+  gene_id %in% switch_genes$gene_id
+] %>%
+  left_join(
+    switch_genes %>% dplyr::select(gene_id, gene_symbol),
+    by = "gene_id"
+  ) %>%
+  arrange(desc(n_MDT_transcripts))
+
+switch_mdt
+switch_mdt
+nrow(switch_mdt)
+switch_mdt_detail <- mdt_counts[
+  gene_id %in% switch_mdt$gene_id
+] %>%
+  left_join(
+    switch_genes %>% dplyr::select(gene_id, gene_symbol),
+    by = "gene_id"
+  ) %>%
+  left_join(
+    sig53 %>%
+      dplyr::select(gene_id, transcript_id, rho, FDR),
+    by = c("gene_id", "transcript_id")
+  ) %>%
+  mutate(
+    age_associated = !is.na(rho)
+  ) %>%
+  arrange(gene_symbol, desc(n_samples_MDT))
+
+switch_mdt_detail
+plot_mdt <- switch_mdt_detail %>%
+  filter(age_associated) %>%
+  mutate(
+    transcript_short = sub("\\..*", "", transcript_id),
+    label = paste0(
+      transcript_short,
+      "  (rho=", round(rho, 2), ")"
+    )
+  )
+
+ggplot(
+  plot_mdt,
+  aes(
+    x = n_samples_MDT,
+    y = reorder(label, n_samples_MDT),
+    fill = rho
+  )
+) +
+  geom_col() +
+  facet_wrap(
+    ~gene_symbol,
+    scales = "free_y",
+    ncol = 3
+  ) +
+  scale_fill_gradient2(
+    low = "#A6CEE3",
+    mid = "white",
+    high = "#FB9A99",
+    midpoint = 0
+  ) +
+  labs(
+    title = "MDT Frequency of Age-associated Transcripts",
+    subtitle = "11 switch-like genes with variable dominant transcripts across 180 ovary samples",
+    x = "Number of samples in which transcript is MDT",
+    y = NULL,
+    fill = "Spearman rho"
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 7)
+  )
+# Her sample için sadece 11 switch-MDT genini al
+switch_mdt_age <- rbindlist(
+  lapply(mdt_list, function(x) {
+    x[gene_id %in% switch_mdt$gene_id,
+      .(gene_id, transcript_id, SAMPID)]
+  }),
+  fill = TRUE
+)
+
+# Yaş bilgisini ekle
+switch_mdt_age <- switch_mdt_age %>%
+  left_join(
+    ovary_age %>% dplyr::select(SAMPID, AGE),
+    by = "SAMPID"
+  ) %>%
+  left_join(
+    gene_annotation,
+    by = "gene_id"
+  )
+
+# Her yaş grubunda her transcript kaç kişide MDT?
+mdt_by_age <- switch_mdt_age %>%
+  group_by(gene_symbol, gene_id, transcript_id, AGE) %>%
+  summarise(
+    n_MDT = n(),
+    .groups = "drop"
+  )
+
+mdt_by_age
+
+
+##gorsel
+ggplot(
+  mdt_by_age,
+  aes(
+    x = AGE,
+    y = n_MDT,
+    fill = transcript_id
+  )
+) +
+  geom_col() +
+  facet_wrap(~gene_symbol, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Dominant Transcript Distribution Across Age Groups",
+    x = "Age group",
+    y = "Number of samples with transcript as MDT",
+    fill = "Transcript"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold")
+  )
+##
+library(Biostrings)
+
+# 11 switch genindeki, en az bir sample'da MDT olmuş transcriptler
+mdt26_ids <- unique(switch_mdt_detail$transcript_id)
+
+length(mdt26_ids)   # 26 olmalı
+
+# Daha önce yüklediğimiz cDNA FASTA'dan seç
+mdt26_fasta <- cdna[names(cdna) %in% mdt26_ids]
+
+length(mdt26_fasta)
+
+# Kaydet
+writeXStringSet(
+  mdt26_fasta,
+  "Switch_MDT_26_transcripts_cDNA.fasta"
+)
+# MDT transcript ID'leri
+mdt26_ids <- unique(switch_mdt_detail$transcript_id)
+
+# FASTA'daki transcript ID'lerini kullanarak eşleştir
+idx <- cdna_ids %in% mdt26_ids
+
+mdt26_fasta <- cdna[idx]
+
+# İsimleri sadece ENST ID yap
+names(mdt26_fasta) <- cdna_ids[idx]
+
+length(mdt26_fasta)
+length(mdt26_fasta)
+
+writeXStringSet(
+  mdt26_fasta,
+  "Switch_MDT_26_transcripts_cDNA.fasta"
+)
+mdt50 <- switch_mdt_detail %>%
+  filter(n_samples_MDT >= 50) %>%
+  arrange(desc(n_samples_MDT))
+
+mdt50
+mdt50_ids <- unique(mdt50$transcript_id)
+
+length(mdt50_ids)
+
+idx50 <- cdna_ids %in% mdt50_ids
+
+mdt50_fasta <- cdna[idx50]
+names(mdt50_fasta) <- cdna_ids[idx50]
+
+length(mdt50_fasta)
+
+writeXStringSet(
+  mdt50_fasta,
+  "MDT50_candidate_transcripts_cDNA.fasta"
+)
+
+mdt50_summary <- mdt50 %>%
+  dplyr::select(
+    gene_symbol,
+    transcript_id,
+    n_samples_MDT,
+    rho,
+    FDR
+  ) %>%
+  arrange(gene_symbol, desc(n_samples_MDT))
+
+mdt50_summary
+
+length(unique(mdt50_summary$gene_symbol))
+mdt50_sig <- switch_mdt_detail %>%
+  filter(
+    n_samples_MDT >= 50,
+    FDR < 0.05,
+    abs(rho) >= 0.30
+  ) %>%
+  arrange(gene_symbol, desc(n_samples_MDT))
+
+mdt50_sig
+
+nrow(mdt50_sig)
+length(unique(mdt50_sig$gene_symbol))
+final_ids <- unique(mdt50_sig$transcript_id)
+
+idx_final <- cdna_ids %in% final_ids
+
+final_fasta <- cdna[idx_final]
+names(final_fasta) <- cdna_ids[idx_final]
+
+length(final_fasta)   # 12 olmalı
+
+writeXStringSet(
+  final_fasta,
+  "Final_12_MDT_age_associated_transcripts.fasta"
+)
+gtf_url <- paste0(
+  "https://ftp.ensembl.org/pub/release-88/gtf/homo_sapiens/",
+  "Homo_sapiens.GRCh38.88.gtf.gz"
+)
+
+download.file(
+  gtf_url,
+  "Homo_sapiens.GRCh38.88.gtf.gz",
+  mode = "wb"
+)
+file.exists("Homo_sapiens.GRCh38.88.gtf.gz")
+file.info("Homo_sapiens.GRCh38.88.gtf.gz")$size / 1024^2
+library(rtracklayer)
+
+gtf <- import("Homo_sapiens.GRCh38.88.gtf.gz")
+
+final_gtf <- gtf[
+  gtf$transcript_id %in% final_ids
+]
+
+final_gtf
+table(final_gtf$type)
+length(unique(final_gtf$transcript_id))
+head(gtf$transcript_id)
+head(final_ids)
+final_ids_noversion <- sub("\\..*$", "", final_ids)
+
+final_gtf <- gtf[
+  !is.na(gtf$transcript_id) &
+    gtf$transcript_id %in% final_ids_noversion
+]
+
+table(final_gtf$type)
+length(unique(final_gtf$transcript_id))
+library(dplyr)
+
+region_lengths <- as.data.frame(final_gtf) %>%
+  filter(type %in% c("five_prime_utr", "CDS", "three_prime_utr")) %>%
+  mutate(region_length = end - start + 1) %>%
+  group_by(transcript_id, type) %>%
+  summarise(
+    length = sum(region_length),
+    .groups = "drop"
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = type,
+    values_from = length,
+    values_fill = 0
+  )
+
+region_lengths
+missing_region_ids <- setdiff(
+  final_ids_noversion,
+  region_lengths$transcript_id
+)
+
+missing_region_ids
+as.data.frame(final_gtf) %>%
+  filter(transcript_id %in% missing_region_ids) %>%
+  dplyr::count(transcript_id, type)
+check_lengths <- region_lengths %>%
+  rowwise() %>%
+  mutate(
+    fasta_length = {
+      i <- match(transcript_id, names(final_fasta_noversion))
+      if (!is.na(i)) length(final_fasta_noversion[[i]]) else NA_integer_
+    },
+    annotated_total = CDS + five_prime_utr + three_prime_utr,
+    difference = fasta_length - annotated_total
+  ) %>%
+  ungroup()
+
+check_lengths %>%
+  dplyr::select(
+    transcript_id,
+    fasta_length,
+    CDS,
+    five_prime_utr,
+    three_prime_utr,
+    annotated_total,
+    difference
+  )
+check_lengths %>%
+  dplyr::select(transcript_id, fasta_length, annotated_total, difference)
+utr5_tmp <- list()
+utr3_tmp <- list()
+
+for (id in annotated_ids) {
+  
+  i <- match(id, names(final_fasta_noversion))
+  seq <- final_fasta_noversion[[i]]
+  seq_len <- length(seq)
+  
+  len5 <- region_lengths$five_prime_utr[
+    region_lengths$transcript_id == id
+  ]
+  
+  len3 <- region_lengths$three_prime_utr[
+    region_lengths$transcript_id == id
+  ]
+  
+  if (len5 > 0) {
+    utr5_tmp[[id]] <- as.character(
+      Biostrings::subseq(seq, start = 1, end = len5)
+    )
+  }
+  
+  if (len3 > 0) {
+    utr3_tmp[[id]] <- as.character(
+      Biostrings::subseq(
+        seq,
+        start = seq_len - len3 + 1,
+        end = seq_len
+      )
+    )
+  }
+}
+
+utr5_list <- DNAStringSet(unlist(utr5_tmp))
+utr3_list <- DNAStringSet(unlist(utr3_tmp))
+
+length(utr5_list)
+length(utr3_list)
+
+# Seçilmiş transcriptler: frequent MDT + age-associated
+selected_ids <- sub("\\..*$", "", mdt50_sig$transcript_id)
+
+# architecture_df'deki ID'leri de versionsız hale getir
+architecture_compare <- architecture_df %>%
+  mutate(
+    transcript_id_full = transcript_id,
+    transcript_id = sub("\\..*$", "", transcript_id)
+  )
+
+# Seçilmiş transcriptlerin genleri
+selected_genes <- architecture_compare %>%
+  filter(transcript_id %in% selected_ids) %>%
+  distinct(gene_id)
+
+# Bu genlerdeki TÜM transcriptler
+comparison_transcripts <- architecture_compare %>%
+  filter(gene_id %in% selected_genes$gene_id) %>%
+  mutate(
+    group = ifelse(
+      transcript_id %in% selected_ids,
+      "Selected_MDT",
+      "Other_transcript"
+    )
+  ) %>%
+  left_join(gene_annotation, by = "gene_id") %>%
+  dplyr::select(
+    gene_symbol,
+    gene_id,
+    transcript_id,
+    transcript_id_full,
+    group,
+    cdna_sequence,
+    protein_sequence
+  ) %>%
+  arrange(gene_symbol, group)
+
+comparison_transcripts %>%
+  count(gene_symbol, group)
+comparison_transcripts %>%
+  dplyr::count(gene_symbol, group)
+same_protein_comparison <- comparison_transcripts %>%
+  group_by(gene_symbol, gene_id) %>%
+  filter(
+    protein_sequence %in%
+      protein_sequence[group == "Selected_MDT"]
+  ) %>%
+  ungroup()
+
+same_protein_comparison %>%
+  dplyr::count(gene_symbol, group)
+# FASTA için transcript ID -> sequence eşleştirmesi
+all_cdna_named <- cdna
+names(all_cdna_named) <- cdna_ids
+
+# Aynı protein karşılaştırma setindeki transcriptler
+compare_ids <- same_protein_comparison$transcript_id_full
+
+compare_fasta <- all_cdna_named[
+  names(all_cdna_named) %in% compare_ids
+]
+
+# Grupları isimlere ekle
+group_info <- same_protein_comparison %>%
+  dplyr::select(transcript_id_full, gene_symbol, group)
+
+new_names <- sapply(names(compare_fasta), function(x) {
+  
+  z <- group_info[group_info$transcript_id_full == x, ]
+  
+  paste(
+    z$gene_symbol,
+    x,
+    z$group,
+    sep = "|"
+  )
+})
+
+names(compare_fasta) <- new_names
+
+writeXStringSet(
+  compare_fasta,
+  "SameProtein_SelectedMDT_vs_OtherTranscripts.fasta"
+)
+
+length(compare_fasta)
+emp2_ids <- c(
+  "ENST00000359543.7",
+  "ENST00000536829.1"
+)
+
+emp2_fasta <- all_cdna_named[
+  names(all_cdna_named) %in% emp2_ids
+]
+
+names(emp2_fasta) <- c(
+  "EMP2|ENST00000359543.7|Age_Decreasing",
+  "EMP2|ENST00000536829.1|Age_Increasing"
+)
+
+writeXStringSet(
+  emp2_fasta,
+  "EMP2_AgeDecreasing_vs_AgeIncreasing.fasta"
+)
+
+emp2_fasta
+compare_ids_noversion <- sub("\\..*$", "", compare_ids)
+
+compare_gtf <- gtf[
+  !is.na(gtf$transcript_id) &
+    gtf$transcript_id %in% compare_ids_noversion
+]
+
+table(compare_gtf$type)
+
+length(unique(compare_gtf$transcript_id))
+compare_regions <- as.data.frame(compare_gtf) %>%
+  filter(type %in% c("five_prime_utr", "CDS", "three_prime_utr")) %>%
+  mutate(region_length = end - start + 1) %>%
+  group_by(transcript_id, type) %>%
+  summarise(length = sum(region_length), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = type,
+    values_from = length,
+    values_fill = 0
+  ) %>%
+  left_join(
+    same_protein_comparison %>%
+      mutate(transcript_id = sub("\\..*$", "", transcript_id_full)) %>%
+      dplyr::select(transcript_id, gene_symbol, group),
+    by = "transcript_id"
+  )
+
+compare_regions_long <- compare_regions %>%
+  pivot_longer(
+    cols = c(five_prime_utr, CDS, three_prime_utr),
+    names_to = "region",
+    values_to = "length"
+  ) %>%
+  mutate(
+    region = factor(
+      region,
+      levels = c("five_prime_utr", "CDS", "three_prime_utr"),
+      labels = c("5'UTR", "CDS", "3'UTR")
+    )
+  )
+
+ggplot(
+  compare_regions_long,
+  aes(x = length, y = transcript_id, fill = region)
+) +
+  geom_col() +
+  facet_wrap(~gene_symbol, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Transcript Architecture: Selected MDT vs Same-Protein Transcripts",
+    x = "Annotated length (nt)",
+    y = NULL,
+    fill = "Region"
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 6)
+  )
+
+# rho bilgisini ekle
+plot_architecture <- compare_regions %>%
+  left_join(
+    mdt50_sig %>%
+      mutate(transcript_id = sub("\\..*$", "", transcript_id)) %>%
+      dplyr::select(transcript_id, rho),
+    by = "transcript_id"
+  ) %>%
+  mutate(
+    total_cdna = five_prime_utr + CDS + three_prime_utr + 3,
+    
+    label = ifelse(
+      group == "Selected_MDT",
+      paste0("★ ", transcript_id,
+             " | ρ=", round(rho, 2),
+             " | ", total_cdna, " nt"),
+      paste0(transcript_id,
+             " | ", total_cdna, " nt")
+    )
+  )
+
+# Long format
+plot_architecture_long <- plot_architecture %>%
+  pivot_longer(
+    cols = c(five_prime_utr, CDS, three_prime_utr),
+    names_to = "region",
+    values_to = "length"
+  ) %>%
+  mutate(
+    region = factor(
+      region,
+      levels = c("five_prime_utr", "CDS", "three_prime_utr"),
+      labels = c("5'UTR", "CDS", "3'UTR")
+    )
+  )
+
+# Plot
+ggplot(
+  plot_architecture_long,
+  aes(x = length, y = label, fill = region)
+) +
+  geom_col(width = 0.75) +
+  facet_wrap(~gene_symbol, scales = "free_y", ncol = 3) +
+  scale_fill_manual(
+    values = c(
+      "5'UTR" = "#4DBBD5",
+      "CDS" = "#00A087",
+      "3'UTR" = "#E64B35"
+    )
+  ) +
+  labs(
+    title = "Transcript Architecture of Age-associated MDTs",
+    subtitle = "★ = age-associated frequent MDT; comparison with same-protein transcripts",
+    x = "Transcript region length (nt)",
+    y = NULL,
+    fill = "Region"
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(face = "bold", size = 11),
+    axis.text.y = element_text(size = 6),
+    legend.position = "top"
+  )
+# Transcript ID'lerini versionsız hale getir
+compare_fasta_clean <- compare_fasta
+names(compare_fasta_clean) <- sub(
+  "\\|.*", "",
+  sub("^[^|]+\\|", "", names(compare_fasta_clean))
+)
+
+names(compare_fasta_clean) <- sub("\\..*$", "", names(compare_fasta_clean))
+
+# 3'UTR uzunlukları
+utr3_lengths_all <- as.data.frame(compare_gtf) %>%
+  filter(type == "three_prime_utr") %>%
+  mutate(len = end - start + 1) %>%
+  group_by(transcript_id) %>%
+  summarise(utr3_length = sum(len), .groups = "drop")
+
+# 3'UTR sekanslarını çıkar
+utr3_compare <- DNAStringSet()
+
+for (id in utr3_lengths_all$transcript_id) {
+  
+  if (id %in% names(compare_fasta_clean)) {
+    
+    seq <- compare_fasta_clean[[id]]
+    len3 <- utr3_lengths_all$utr3_length[
+      utr3_lengths_all$transcript_id == id
+    ]
+    
+    seq_len <- length(seq)
+    
+    utr3_compare <- append(
+      utr3_compare,
+      subseq(
+        seq,
+        start = seq_len - len3 + 1,
+        end = seq_len
+      )
+    )
+    
+    names(utr3_compare)[length(utr3_compare)] <- id
+  }
+}
+
+length(utr3_compare)
+utr3_tmp <- list()
+
+for (id in utr3_lengths_all$transcript_id) {
+  
+  if (id %in% names(compare_fasta_clean)) {
+    
+    seq <- compare_fasta_clean[[id]]
+    
+    len3 <- utr3_lengths_all$utr3_length[
+      utr3_lengths_all$transcript_id == id
+    ]
+    
+    seq_len <- length(seq)
+    
+    utr3_tmp[[id]] <- as.character(
+      Biostrings::subseq(
+        seq,
+        start = seq_len - len3 + 1,
+        end = seq_len
+      )
+    )
+  }
+}
+
+utr3_compare <- Biostrings::DNAStringSet(unlist(utr3_tmp))
+
+length(utr3_compare)
+names(utr3_compare)
+#for motif analysis
+utr3_info <- same_protein_comparison %>%
+  mutate(
+    transcript_id = sub("\\..*$", "", transcript_id_full)
+  ) %>%
+  left_join(
+    mdt50_sig %>%
+      mutate(transcript_id = sub("\\..*$", "", transcript_id)) %>%
+      dplyr::select(transcript_id, rho),
+    by = "transcript_id"
+  ) %>%
+  dplyr::select(transcript_id, gene_symbol, group, rho)
+
+new_names <- sapply(names(utr3_compare), function(id) {
+  
+  x <- utr3_info[utr3_info$transcript_id == id, ]
+  
+  if (x$group == "Selected_MDT") {
+    paste0(
+      x$gene_symbol, "|", id,
+      "|Selected_MDT|rho=", round(x$rho, 2)
+    )
+  } else {
+    paste0(
+      x$gene_symbol, "|", id,
+      "|Other_sameProtein"
+    )
+  }
+})
+
+names(utr3_compare) <- new_names
+
+writeXStringSet(
+  utr3_compare,
+  "3UTR_SelectedMDT_vs_OtherSameProtein.fasta"
+)
+
+names(utr3_compare)
+cat(as.character(utr3_compare), sep = "\n")
+writeXStringSet(
+  utr3_compare,
+  "3UTR_RBPmap_input.fasta",
+  format = "fasta"
+)
+#Motif analizi sonuclari
+rbp <- read.csv(
+  "/Users/lemannur/Downloads/All_Predictions.csv",
+  check.names = FALSE
+)
+
+dim(rbp)
+colnames(rbp)
+head(rbp)
+rbp_lines <- readLines(
+  "/Users/lemannur/Downloads/All_Predictions.csv"
+)
+
+# İlk transcriptin başlangıcından sonraki 40 satırı görelim
+start <- grep("TMEM109\\|ENST00000227525", rbp_lines)[1]
+
+rbp_lines[start:(start + 40)]
+library(data.table)
+library(dplyr)
+
+current_transcript <- NA_character_
+out <- list()
+k <- 1
+
+for (line in rbp_lines) {
+  
+  # Transcript başlığı
+  if (grepl("\\|ENST[0-9]+\\|", line)) {
+    current_transcript <- trimws(line)
+  }
+  
+  # Prediction satırı
+  else if (
+    !is.na(current_transcript) &&
+    grepl(",", line) &&
+    !grepl("^Protein", line)
+  ) {
+    
+    parts <- trimws(strsplit(line, ",", fixed = TRUE)[[1]])
+    
+    if (length(parts) == 6) {
+      
+      out[[k]] <- data.frame(
+        transcript_info = current_transcript,
+        Protein  = parts[1],
+        Position = as.numeric(parts[2]),
+        Motif    = parts[3],
+        Kmer     = parts[4],
+        Zscore   = as.numeric(parts[5]),
+        Pvalue   = as.numeric(parts[6]),
+        stringsAsFactors = FALSE
+      )
+      
+      k <- k + 1
+    }
+  }
+}
+
+rbp_predictions <- bind_rows(out)
+
+dim(rbp_predictions)
+head(rbp_predictions)
+length(unique(rbp_predictions$transcript_info))
+# Transcript bilgisini ayır
+rbp_analysis <- rbp_predictions %>%
+  tidyr::separate(
+    transcript_info,
+    into = c("gene_symbol", "transcript_id", "group", "rho_info"),
+    sep = "\\|",
+    fill = "right",
+    remove = FALSE
+  ) %>%
+  mutate(
+    rho = ifelse(
+      grepl("rho=", rho_info),
+      as.numeric(sub("rho=", "", rho_info)),
+      NA_real_
+    )
+  )
+
+# 3'UTR uzunluklarını ekle
+rbp_analysis <- rbp_analysis %>%
+  left_join(
+    utr3_lengths_all,
+    by = "transcript_id"
+  )
+
+# Her transcript × RBP için hit sayısı ve hits/kb
+rbp_density <- rbp_analysis %>%
+  group_by(
+    gene_symbol,
+    transcript_id,
+    group,
+    rho,
+    Protein,
+    utr3_length
+  ) %>%
+  summarise(
+    n_hits = n(),
+    min_pvalue = min(Pvalue, na.rm = TRUE),
+    max_Zscore = max(Zscore, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    hits_per_kb = n_hits / (utr3_length / 1000)
+  )
+
+head(rbp_density)
+rbp_analysis <- rbp_predictions %>%
+  mutate(
+    gene_symbol = sub("\\|.*", "", transcript_info),
+    
+    transcript_id = sub(
+      "^[^|]+\\|([^|]+)\\|.*$",
+      "\\1",
+      transcript_info
+    ),
+    
+    group = ifelse(
+      grepl("\\|Selected_MDT\\|", transcript_info),
+      "Selected_MDT",
+      "Other_sameProtein"
+    ),
+    
+    rho = ifelse(
+      grepl("rho=", transcript_info),
+      as.numeric(sub(".*rho=", "", transcript_info)),
+      NA_real_
+    )
+  ) %>%
+  left_join(
+    utr3_lengths_all,
+    by = "transcript_id"
+  )
+
+head(rbp_analysis)
+rbp_density <- rbp_analysis %>%
+  group_by(
+    gene_symbol,
+    transcript_id,
+    group,
+    rho,
+    Protein,
+    utr3_length
+  ) %>%
+  summarise(
+    n_hits = n(),
+    min_pvalue = min(Pvalue, na.rm = TRUE),
+    max_Zscore = max(Zscore, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    hits_per_kb = n_hits / (utr3_length / 1000)
+  )
+
+rbp_density %>%
+  arrange(desc(hits_per_kb)) %>%
+  head(20)
+rbp_compare <- rbp_density %>%
+  group_by(gene_symbol, Protein, group) %>%
+  summarise(
+    mean_density = mean(hits_per_kb, na.rm = TRUE),
+    n_transcripts = n_distinct(transcript_id),
+    .groups = "drop"
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = group,
+    values_from = c(mean_density, n_transcripts),
+    values_fill = 0
+  ) %>%
+  mutate(
+    density_difference =
+      mean_density_Selected_MDT -
+      mean_density_Other_sameProtein,
+    
+    fold_change =
+      (mean_density_Selected_MDT + 0.01) /
+      (mean_density_Other_sameProtein + 0.01)
+  ) %>%
+  arrange(desc(abs(density_difference)))
+
+rbp_compare %>%
+  dplyr::select(
+    gene_symbol,
+    Protein,
+    mean_density_Selected_MDT,
+    mean_density_Other_sameProtein,
+    density_difference,
+    fold_change
+  ) %>%
+  head(30)
+rbp_compare_valid <- rbp_compare %>%
+  filter(
+    n_transcripts_Selected_MDT > 0,
+    n_transcripts_Other_sameProtein > 0
+  )
+
+rbp_compare_valid %>%
+  dplyr::select(
+    gene_symbol,
+    Protein,
+    mean_density_Selected_MDT,
+    mean_density_Other_sameProtein,
+    density_difference,
+    fold_change
+  ) %>%
+  arrange(desc(abs(density_difference))) %>%
+  print(n = 30)
+top30_rbp <- rbp_compare_valid %>%
+  arrange(desc(abs(density_difference))) %>%
+  dplyr::select(
+    gene_symbol,
+    Protein,
+    mean_density_Selected_MDT,
+    mean_density_Other_sameProtein,
+    density_difference,
+    fold_change
+  ) %>%
+  head(30)
+
+as.data.frame(top30_rbp)
+library(ggplot2)
+
+top_heat <- rbp_compare_valid %>%
+  group_by(gene_symbol) %>%
+  slice_max(
+    order_by = abs(density_difference),
+    n = 10,
+    with_ties = FALSE
+  ) %>%
+  ungroup()
+
+ggplot(
+  top_heat,
+  aes(
+    x = gene_symbol,
+    y = Protein,
+    fill = density_difference
+  )
+) +
+  geom_tile(color = "white") +
+  labs(
+    title = "Differential RBP Motif Density in Selected MDT 3'UTRs",
+    subtitle = "Selected MDT minus other same-protein transcripts",
+    x = NULL,
+    y = "RBP",
+    fill = "Δ hits/kb"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 7)
+  )
+emp2_density <- rbp_density %>%
+  filter(gene_symbol == "EMP2") %>%
+  dplyr::select(
+    transcript_id, rho, Protein, hits_per_kb
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = transcript_id,
+    values_from = hits_per_kb,
+    values_fill = 0
+  ) %>%
+  mutate(
+    difference =
+      ENST00000536829 - ENST00000359543
+  ) %>%
+  arrange(desc(abs(difference)))
+
+head(emp2_density, 20)
+emp2_top <- emp2_density %>%
+  slice_max(abs(difference), n = 15)
+
+ggplot(
+  emp2_top,
+  aes(
+    x = difference,
+    y = reorder(Protein, difference)
+  )
+) +
+  geom_col() +
+  geom_vline(xintercept = 0, linetype = 2) +
+  labs(
+    title = "EMP2: Differential RBP Motif Density",
+    subtitle = "Age-increasing transcript minus age-decreasing transcript",
+    x = "Δ RBP motif density (hits/kb)",
+    y = "RBP"
+  ) +
+  theme_classic()
+top5_per_gene <- rbp_compare_valid %>%
+  group_by(gene_symbol) %>%
+  slice_max(
+    order_by = abs(density_difference),
+    n = 5,
+    with_ties = FALSE
+  ) %>%
+  ungroup() %>%
+  mutate(
+    label = paste0(
+      Protein,
+      " | Δ=", round(density_difference, 1)
+    )
+  )
+
+ggplot(
+  top5_per_gene,
+  aes(
+    x = density_difference,
+    y = reorder(label, density_difference)
+  )
+) +
+  geom_col() +
+  geom_vline(
+    xintercept = 0,
+    linetype = 2
+  ) +
+  facet_wrap(
+    ~gene_symbol,
+    scales = "free_y",
+    ncol = 2
+  ) +
+  labs(
+    title = "Top RBP Motif Differences in Age-associated MDTs",
+    subtitle = "Selected MDT minus other same-protein transcripts",
+    x = "Δ motif density (hits/kb)",
+    y = NULL
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 8)
+  )
+# Genel genler
+general_plot <- rbp_compare_valid %>%
+  group_by(gene_symbol) %>%
+  slice_max(abs(density_difference), n = 5, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    gene_symbol,
+    Protein,
+    difference = density_difference,
+    comparison = "Selected MDT vs Other same-protein"
+  )
+
+# EMP2
+emp2_plot <- emp2_density %>%
+  slice_max(abs(difference), n = 5, with_ties = FALSE) %>%
+  transmute(
+    gene_symbol = "EMP2",
+    Protein,
+    difference,
+    comparison = "Selected ↑ vs Selected ↓"
+  )
+
+plot_all <- bind_rows(general_plot, emp2_plot)
+ggplot(
+  plot_all,
+  aes(
+    x = difference,
+    y = reorder(Protein, difference)
+  )
+) +
+  geom_col() +
+  geom_vline(xintercept = 0, linetype = 2) +
+  facet_wrap(
+    ~gene_symbol,
+    scales = "free_y",
+    ncol = 2
+  ) +
+  labs(
+    title = "RBP Motifs Distinguishing Age-associated Selected MDTs",
+    subtitle = paste0(
+      "RIGHT → enriched in Selected MDT   |   ",
+      "LEFT → enriched in other same-protein transcripts\n",
+      "EMP2: RIGHT → age-increasing Selected MDT; ",
+      "LEFT → age-decreasing Selected MDT"
+    ),
+    x = "Difference in RBP motif density (hits/kb)",
+    y = "Predicted RBP"
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(face = "bold", size = 11),
+    axis.text.y = element_text(size = 8),
+    plot.subtitle = element_text(size = 9)
+  )
+# Her gen için Selected transcript bilgisini oluştur
+selected_labels <- mdt50_sig %>%
+  mutate(
+    transcript_id = sub("\\..*$", "", transcript_id),
+    txt = paste0(
+      transcript_id,
+      " (ρ=", round(rho, 2), ")"
+    )
+  ) %>%
+  group_by(gene_symbol) %>%
+  summarise(
+    selected_transcript = paste(txt, collapse = "\n"),
+    .groups = "drop"
+  )
+
+# Dot plot datasına ekle
+dot_data2 <- dot_data %>%
+  left_join(selected_labels, by = "gene_symbol") %>%
+  mutate(
+    gene_label = paste0(
+      gene_symbol,
+      "\n",
+      selected_transcript
+    )
+  )
+
+ggplot(
+  dot_data2,
+  aes(
+    x = gene_label,
+    y = Protein,
+    size = abs(difference),
+    fill = direction
+  )
+) +
+  geom_point(shape = 21, color = "black") +
+  scale_size_continuous(name = "|Δ motif density|") +
+  labs(
+    title = "RBP Motifs Distinguishing Age-associated MDTs",
+    subtitle = "Selected transcript ID and age association shown for each gene",
+    x = "Selected MDT",
+    y = "Predicted RBP",
+    fill = "Higher motif density"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      size = 8
+    ),
+    axis.text.y = element_text(size = 8),
+    legend.position = "right"
+  )
+# 1. Genel genler: top 3 RBP
+general_top3 <- rbp_compare_valid %>%
+  group_by(gene_symbol) %>%
+  slice_max(
+    order_by = abs(density_difference),
+    n = 3,
+    with_ties = FALSE
+  ) %>%
+  ungroup() %>%
+  transmute(
+    gene_symbol,
+    Protein,
+    difference = density_difference,
+    direction = ifelse(
+      difference > 0,
+      "Higher in Selected MDT",
+      "Higher in Other transcript"
+    )
+  )
+
+# 2. EMP2: top 3 RBP
+emp2_top3 <- emp2_density %>%
+  slice_max(
+    order_by = abs(difference),
+    n = 3,
+    with_ties = FALSE
+  ) %>%
+  transmute(
+    gene_symbol = "EMP2",
+    Protein,
+    difference,
+    direction = ifelse(
+      difference > 0,
+      "Higher in age-increasing MDT",
+      "Higher in age-decreasing MDT"
+    )
+  )
+
+# 3. Birleştir
+dot_data <- bind_rows(general_top3, emp2_top3)
+
+# 4. Selected transcript bilgileri
+selected_labels <- mdt50_sig %>%
+  mutate(
+    transcript_id = sub("\\..*$", "", transcript_id),
+    txt = paste0(
+      transcript_id,
+      "\nρ=", round(rho, 2),
+      " | MDT=", n_samples_MDT, "/180"
+    )
+  ) %>%
+  group_by(gene_symbol) %>%
+  summarise(
+    selected_transcript = paste(txt, collapse = "\n"),
+    .groups = "drop"
+  )
+
+# 5. Plot datası
+dot_data2 <- dot_data %>%
+  left_join(selected_labels, by = "gene_symbol") %>%
+  mutate(
+    gene_label = paste0(
+      gene_symbol,
+      "\n",
+      selected_transcript
+    )
+  )
+ggplot(
+  dot_data2,
+  aes(
+    x = gene_label,
+    y = Protein,
+    size = abs(difference),
+    fill = direction
+  )
+) +
+  geom_point(shape = 21, color = "black", stroke = 0.4) +
+  scale_size_continuous(name = "|Δ motifs/kb|") +
+  labs(
+    title = "RBP Motifs Distinguishing Age-associated MDTs",
+    subtitle = "Top 3 differential RBP motifs per gene",
+    x = NULL,
+    y = "Predicted RBP",
+    fill = "Higher motif density"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      size = 7
+    ),
+    axis.text.y = element_text(size = 7),
+    legend.position = "right"
+  )
+# Genel genler: yüksek fark gösteren TÜM RBP'ler
+general_high <- rbp_compare_valid %>%
+  filter(abs(density_difference) >= 10) %>%
+  transmute(
+    gene_symbol,
+    Protein,
+    difference = density_difference,
+    direction = ifelse(
+      difference > 0,
+      "Higher in Selected MDT",
+      "Higher in Other transcript"
+    )
+  )
+
+# EMP2: aynı eşik
+emp2_high <- emp2_density %>%
+  filter(abs(difference) >= 10) %>%
+  transmute(
+    gene_symbol = "EMP2",
+    Protein,
+    difference,
+    direction = ifelse(
+      difference > 0,
+      "Higher in age-increasing MDT",
+      "Higher in age-decreasing MDT"
+    )
+  )
+
+dot_data <- bind_rows(general_high, emp2_high)
+
+# Transcript bilgilerini ekle
+dot_data2 <- dot_data %>%
+  left_join(selected_labels, by = "gene_symbol") %>%
+  mutate(
+    gene_label = paste0(
+      gene_symbol, "\n",
+      selected_transcript
+    )
+  )
+
+# Kaç RBP kaldı?
+dot_data2 %>%
+  dplyr::count(gene_symbol)
+plot_high <- dot_data2 %>%
+  filter(gene_symbol != "EMP2")
+
+ggplot(
+  plot_high,
+  aes(
+    x = difference,
+    y = reorder(Protein, difference),
+    fill = direction
+  )
+) +
+  geom_col() +
+  geom_vline(xintercept = 0, linetype = 2) +
+  facet_wrap(~gene_symbol, scales = "free_y", ncol = 2) +
+  labs(
+    title = "Differential RBP Motifs in Age-associated MDTs",
+    subtitle = "|Δ motif density| ≥ 10 hits/kb",
+    x = "Δ motif density (Selected MDT − Other same-protein transcript)",
+    y = "Predicted RBP",
+    fill = "Higher motif density"
+  ) +
+  theme_classic()
+ggsave(
+  "Differential_RBP_Motifs_MDT.png",
+  plot = last_plot(),
+  width = 12,
+  height = 14,
+  dpi = 600
+)
+ggsave(
+  "Differential_RBP_Motifs_MDT.png",
+  plot = last_plot(),
+  width = 12,
+  height = 14,
+  dpi = 600
+)
+library(ggrepel)
+
+emp2_plot <- emp2_density %>%
+  mutate(
+    direction = ifelse(
+      difference > 0,
+      "Age-increasing MDT\nENST00000536829",
+      "Age-decreasing MDT\nENST00000359543"
+    ),
+    label = ifelse(
+      abs(difference) >= 20,
+      Protein,
+      NA
+    )
+  )
+
+ggplot(emp2_plot,
+       aes(x = difference,
+           y = reorder(Protein, difference))) +
+  
+  geom_segment(
+    aes(x = 0, xend = difference,
+        yend = reorder(Protein, difference)),
+    linewidth = 0.35
+  ) +
+  
+  geom_point(
+    aes(size = abs(difference),
+        fill = direction),
+    shape = 21,
+    color = "black"
+  ) +
+  
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+  
+  geom_text_repel(
+    aes(label = label),
+    size = 3,
+    max.overlaps = Inf
+  ) +
+  
+  scale_size_continuous(
+    name = "|Δ motif density|"
+  ) +
+  
+  labs(
+    title = "EMP2: Differential RBP Motif Landscape",
+    subtitle =
+      "ENST00000536829 (ρ = +0.34) vs ENST00000359543 (ρ = −0.35)",
+    x = "Δ motif density (hits/kb)",
+    y = NULL,
+    fill = "Higher motif density"
+  ) +
+  
+  theme_classic() +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "right"
+  )
+ggsave(
+  "EMP2_RBP_Motif_Landscape.png",
+  plot = last_plot(),
+  width = 16,
+  height = 8,
+  dpi = 600,
+  bg = "white"
+)
+
+emp2_dot <- emp2_density %>%
+  filter(abs(difference) >= 10) %>%
+  mutate(
+    direction = ifelse(
+      difference > 0,
+      "Age-increasing MDT",
+      "Age-decreasing MDT"
+    )
+  )
+
+ggplot(
+  emp2_dot,
+  aes(
+    x = difference,
+    y = reorder(Protein, difference),
+    fill = direction
+  )
+) +
+  geom_point(
+    aes(size = abs(difference)),
+    shape = 21,
+    color = "black",
+    stroke = 0.3
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+  scale_size_continuous(
+    range = c(2, 5),
+    name = "|Δ motifs/kb|"
+  ) +
+  labs(
+    title = "EMP2: Differential 3′UTR RBP Motifs",
+    subtitle =
+      "ENST00000536829 (ρ = +0.34) vs ENST00000359543 (ρ = −0.35)",
+    x = "Δ motif density (hits/kb)",
+    y = "Predicted RBP",
+    fill = "Higher motif density"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    axis.text.y = element_text(size = 6),
+    legend.position = "right",
+    plot.title = element_text(face = "bold")
+  )
+ggsave(
+  "EMP2_Differential_RBP_Motifs.png",
+  plot = last_plot(),
+  width = 10,
+  height = 8,
+  dpi = 600,
+  bg = "white"
+)
+#EMP2 nin age switchi
+emp2_age <- target_long %>%
+  filter(
+    transcript_id %in% c(
+      "ENST00000359543.7",
+      "ENST00000536829.1"
+    )
+  ) %>%
+  group_by(AGE, transcript_id) %>%
+  summarise(
+    mean_usage = mean(cdna_usage, na.rm = TRUE),
+    median_usage = median(cdna_usage, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    AGE = factor(
+      AGE,
+      levels = c(
+        "20-29","30-39","40-49",
+        "50-59","60-69","70-79"
+      )
+    )
+  )
+
+emp2_age
+#gorsel flowun
+library(DiagrammeR)
+library(DiagrammeRsvg)
+library(rsvg)
+
+# =========================
+# WORKFLOW
+# =========================
+
+flow <- grViz("
+digraph workflow {
+
+  graph [
+    layout = dot,
+    rankdir = TB,
+    bgcolor = white,
+    nodesep = 0.35,
+    ranksep = 0.45
+  ]
+
+  node [
+    shape = box,
+    style = 'rounded,filled',
+    fontname = Helvetica,
+    fontsize = 11,
+    color = '#444444',
+    penwidth = 1.2,
+    margin = 0.15
+  ]
+
+  edge [
+    color = '#666666',
+    penwidth = 1.2,
+    arrowsize = 0.7
+  ]
+
+  A [
+    label = 'GTEx v8 Ovary RNA-seq\\n180 samples\\nTranscript-level TPM',
+    fillcolor = '#E8F1FA'
+  ]
+
+  B [
+    label = 'Ensembl release 88\\ncDNA + protein sequences\\nTranscript annotation',
+    fillcolor = '#E8F1FA'
+  ]
+
+  C [
+    label = 'Transcript redundancy filtering\\nSame gene + identical cDNA + identical protein\\n25 redundant transcripts merged',
+    fillcolor = '#F3F3F3'
+  ]
+
+  D [
+    label = 'Transcript architecture classification\\nDifferent cDNA but same annotated protein',
+    fillcolor = '#E8F5E9'
+  ]
+
+  E [
+    label = '740 genes\\nMultiple cDNA transcripts\\nSame annotated protein',
+    fillcolor = '#E8F5E9'
+  ]
+
+  F [
+    label = 'Transcript usage per sample\\nTranscript TPM / total gene TPM',
+    fillcolor = '#FFF3E0'
+  ]
+
+  G [
+    label = 'Age association\\nSpearman correlation\\nBH-FDR correction',
+    fillcolor = '#FFF3E0'
+  ]
+
+  H [
+    label = '53 age-associated transcripts\\n36 genes\\nFDR < 0.05 and |rho| >= 0.30',
+    fillcolor = '#FFE0B2'
+  ]
+
+  I [
+    label = 'Opposite age trajectories\\nIncreasing + decreasing transcripts\\nwithin the same gene',
+    fillcolor = '#FFE0B2'
+  ]
+
+  J [
+    label = '15 switch-like genes',
+    fillcolor = '#FFD6A5'
+  ]
+
+  K [
+    label = 'Raw MDT analysis\\nHighest-TPM transcript per gene/sample\\n180 ovary samples',
+    fillcolor = '#EDE7F6'
+  ]
+
+  L [
+    label = '11/15 switch-like genes\\nshow variable dominant transcripts',
+    fillcolor = '#D1C4E9'
+  ]
+
+  M [
+    label = 'Frequent + age-associated MDTs\\nMDT >= 50/180\\nFDR < 0.05 and |rho| >= 0.30',
+    fillcolor = '#D1C4E9'
+  ]
+
+  N [
+    label = '12 transcripts\\n9 genes',
+    fillcolor = '#B39DDB'
+  ]
+
+  O [
+    label = 'Same-protein transcript comparison\\nSelected MDT vs other transcripts\\nof the same gene encoding the same protein',
+    fillcolor = '#E0F2F1'
+  ]
+
+  P [
+    label = '3-prime UTR extraction\\nEnsembl GTF + cDNA sequences',
+    fillcolor = '#E0F2F1'
+  ]
+
+  Q [
+    label = 'RBPmap motif prediction\\n3-prime UTR RBP-binding motifs',
+    fillcolor = '#D7ECEA'
+  ]
+
+  R [
+    label = 'Differential motif density\\nSelected MDT vs other same-protein transcripts\\nRBP hits per kb',
+    fillcolor = '#B2DFDB'
+  ]
+
+  S [
+    label = 'EMP2 case study\\nSame protein - distinct 3-prime UTRs',
+    fillcolor = '#FCE4EC'
+  ]
+
+  T [
+    label = 'ENST00000359543.7\\nrho = -0.35\\n3-prime UTR = 4483 nt',
+    fillcolor = '#F8BBD0'
+  ]
+
+  U [
+    label = 'ENST00000536829.1\\nrho = +0.34\\n3-prime UTR = 56 nt',
+    fillcolor = '#F8BBD0'
+  ]
+
+  V [
+    label = 'Age-associated transcript usage crossover\\nbetween 50-59 and 60-69 years',
+    fillcolor = '#F48FB1'
+  ]
+
+  A -> C
+  B -> C
+
+  C -> D
+  D -> E
+  E -> F
+  F -> G
+  G -> H
+  H -> I
+  I -> J
+
+  J -> K
+  K -> L
+  L -> M
+  M -> N
+
+  N -> O
+  O -> P
+  P -> Q
+  Q -> R
+
+  R -> S
+  S -> T
+  S -> U
+  T -> V
+  U -> V
+}
+")
+
+# Show workflow
+flow
+
+
+# =========================
+# SAVE HIGH-RESOLUTION PNG
+# =========================
+
+svg <- export_svg(flow)
+
+rsvg_png(
+  charToRaw(svg),
+  file = "GTEx_Ovary_Age_MDT_Workflow.png",
+  width = 3000,
+  height = 4500
+)
